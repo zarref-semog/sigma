@@ -1,0 +1,16 @@
+{
+  "name": "routes-worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "amqplib": "^0.10.9",
+    "mongoose": "^9.9.2",
+    "neo4j-driver": "^5.28.2"
+  }
+}

@@ -1,0 +1,225 @@
+name: sigma
+
+x-api-common: &api-common
+  restart: unless-stopped
+  networks: [sigma-network]
+  environment: &api-environment
+    NODE_ENV: ${NODE_ENV:-production}
+    RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+    JWT_SECRET: ${JWT_SECRET}
+  depends_on:
+    rabbitmq:
+      condition: service_healthy
+    mongodb:
+      condition: service_healthy
+
+services:
+  frontend:
+    build: ./frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    networks: [sigma-network]
+    depends_on:
+      api-gateway:
+        condition: service_healthy
+
+  api-gateway:
+    build: ./backend/api-gateway
+    restart: unless-stopped
+    environment:
+      PORT: 3000
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      JWT_SECRET: ${JWT_SECRET}
+    ports:
+      - "${API_GATEWAY_PORT:-3000}:3000"
+    networks: [sigma-network]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  user-api:
+    <<: *api-common
+    build: ./backend/user-api
+    environment:
+      <<: *api-environment
+      PORT: 3001
+      API_KEY: ${USER_API_KEY}
+      DATABASE_URL: mongodb://${MONGODB_HOST:-mongodb}:27017/users_db
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+    ports:
+      - "${USER_API_PORT:-3001}:3001"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3001/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  project-api:
+    <<: *api-common
+    build: ./backend/project-api
+    environment:
+      <<: *api-environment
+      PORT: 3002
+      API_KEY: ${PROJECT_API_KEY}
+      DATABASE_URL: mongodb://${MONGODB_HOST:-mongodb}:27017/projects_db
+      NEO4J_URI: neo4j://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+    ports:
+      - "${PROJECT_API_PORT:-3002}:3002"
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3002/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  mission-api:
+    <<: *api-common
+    build: ./backend/mission-api
+    environment:
+      <<: *api-environment
+      PORT: 3003
+      API_KEY: ${MISSION_API_KEY}
+      DATABASE_URL: mongodb://${MONGODB_HOST:-mongodb}:27017/missions_db
+    ports:
+      - "${MISSION_API_PORT:-3003}:3003"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3003/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  agv-api:
+    <<: *api-common
+    build: ./backend/agv-api
+    environment:
+      <<: *api-environment
+      PORT: 3004
+      API_KEY: ${AGV_API_KEY}
+      DATABASE_URL: mongodb://${MONGODB_HOST:-mongodb}:27017/agvs_db
+    ports:
+      - "${AGV_API_PORT:-3004}:3004"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3004/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  routes-worker:
+    <<: *api-common
+    build: ./backend/routes-worker
+    environment:
+      <<: *api-environment
+      DATABASE_URL: mongodb://${MONGODB_HOST:-mongodb}:27017/routes_db
+      NEO4J_URI: neo4j://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      MIN_AGV_BATTERY: ${MIN_AGV_BATTERY:-20}
+      MISSION_SCHEDULER_INTERVAL_MS: ${MISSION_SCHEDULER_INTERVAL_MS:-5000}
+      LOG_LEVEL: ${ROUTES_WORKER_LOG_LEVEL:-info}
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+      mission-api:
+        condition: service_healthy
+      agv-api:
+        condition: service_healthy
+      robot-gateway:
+        condition: service_healthy
+
+  robot-gateway:
+    restart: unless-stopped
+    build: ./backend/robot-gateway
+    environment:
+      PORT: 3006
+      RABBITMQ_URL: amqp://${RABBITMQ_USER}:${RABBITMQ_PASSWORD}@rabbitmq:5672
+      ROBOT_STEP_INTERVAL_MS: ${ROBOT_STEP_INTERVAL_MS:-250}
+    ports:
+      - "${ROBOT_GATEWAY_PORT:-3006}:3006"
+    networks: [sigma-network]
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3006/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rabbitmq:
+    image: rabbitmq:4.1-management-alpine
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
+    ports:
+      - "${RABBITMQ_AMQP_PORT:-5672}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT:-15672}:15672"
+    volumes:
+      - rabbitmq-data:/var/lib/rabbitmq
+    networks: [sigma-network]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  mongodb:
+    image: mongo:8.0
+    restart: unless-stopped
+    ports:
+      - "${MONGODB_PORT:-27017}:27017"
+    volumes:
+      - mongodb-data:/data/db
+    networks: [sigma-network]
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_USER:-neo4j}/${NEO4J_PASSWORD}
+    ports:
+      - "${NEO4J_BROWSER_PORT:-7474}:7474"
+      - "${NEO4J_BOLT_PORT:-7687}:7687"
+    volumes:
+      - neo4j-data:/data
+    networks: [sigma-network]
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u ${NEO4J_USER:-neo4j} -p ${NEO4J_PASSWORD} 'RETURN 1' >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 20s
+
+networks:
+  sigma-network:
+    driver: bridge
+
+volumes:
+  rabbitmq-data:
+  mongodb-data:
+  neo4j-data:
